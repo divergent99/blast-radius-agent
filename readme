@@ -1,0 +1,219 @@
+<div align="center">
+
+# 💥 Blast Radius Agent
+
+**Intelligent MR impact analysis powered by GitLab Orbit**
+
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![Claude](https://img.shields.io/badge/Claude-Sonnet_4.6-D97706?style=flat-square&logo=anthropic&logoColor=white)](https://anthropic.com)
+[![GitLab Orbit](https://img.shields.io/badge/GitLab-Orbit_API-FC6D26?style=flat-square&logo=gitlab&logoColor=white)](https://docs.gitlab.com/orbit)
+[![Railway](https://img.shields.io/badge/Deployed_on-Railway-0B0D0E?style=flat-square&logo=railway&logoColor=white)](https://railway.app)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+
+*Built for the [GitLab Transcend Hackathon 2026](https://gitlab-transcend.devpost.com)*
+
+[Live Dashboard](https://blast-radius-dashboard.vercel.app) · [API Docs](https://blast-radius-agent-production.up.railway.app/docs) · [GitLab Repo](https://gitlab.com/gitlab-ai-hackathon/transcend/35648667)
+
+</div>
+
+---
+
+## What is Blast Radius?
+
+When a developer opens a merge request, reviewers have no idea how many downstream files could break. They eyeball the diff. **GitLab Orbit actually knows the dependency graph.**
+
+Blast Radius Agent hooks into your GitLab project and automatically:
+
+1. Detects which files changed in an MR
+2. Traverses Orbit's knowledge graph to find every file that imports from those files
+3. Identifies the specific symbols at risk
+4. Suggests reviewers based on historical approvals
+5. Posts a structured analysis comment directly on the MR — in seconds
+
+No manual review. No guessing. Just data from the graph.
+
+---
+
+## Demo
+
+> Open an MR → Blast Radius comment appears automatically
+
+```
+MR: Update TokenService.generate() signature
+↓
+Orbit traversal finds: validator.py, session.py import TokenService
+↓
+Claude synthesizes: "This MR touches core auth — 2 files at risk, TokenService symbol affected"
+↓
+Comment posted on MR with risk table and pre-merge checklist
+```
+
+---
+
+## Architecture
+
+```
+GitLab Webhook (MR opened)
+        │
+        ▼
+┌─────────────────┐
+│   FastAPI App   │  ← main.py
+│                 │
+│  /webhook       │  Receives MR events
+│  /analyze       │  Blast radius for dashboard
+│  /graph         │  Full project dependency graph
+│  /describe      │  Claude file descriptions
+│  /chat          │  Codebase Q&A
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    │         │
+    ▼         ▼
+GitLab    GitLab
+REST API  Orbit API
+(MR diff) (Graph traversal)
+    │         │
+    └────┬────┘
+         │
+         ▼
+  ┌─────────────┐
+  │   Claude    │  Synthesizes analysis
+  │ Sonnet 4.6  │  Generates MR comment
+  └─────────────┘
+         │
+         ▼
+  MR Comment Posted
+```
+
+---
+
+## File Structure
+
+```
+blast-radius-agent/
+├── main.py              # FastAPI app — all endpoints
+├── orbit_client.py      # GitLab Orbit API queries
+├── gitlab_client.py     # GitLab REST API (MR data, comments)
+├── synthesizer.py       # Claude integration
+├── requirements.txt     # Python dependencies
+├── Dockerfile           # Container config for Railway
+└── test/
+    ├── test_orbit.py    # Orbit query tests
+    ├── test_gitlab.py   # GitLab API tests
+    ├── test_synthesizer.py
+    └── test_webhook.py  # End-to-end webhook test
+```
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET`  | `/health` | Health check |
+| `POST` | `/webhook` | GitLab MR webhook receiver |
+| `POST` | `/analyze` | Blast radius for a specific MR |
+| `POST` | `/graph` | Full project dependency graph |
+| `POST` | `/describe` | Claude-generated file description |
+| `POST` | `/chat` | Codebase Q&A with graph context |
+
+---
+
+## How Orbit is Used
+
+This project uses **4 distinct Orbit query types** against the knowledge graph:
+
+```python
+# 1. Find all files in a project (traversal)
+Project → CONTAINS → Branch → ON_BRANCH → File
+
+# 2. Find what a file exports (traversal)
+File → DEFINES → Definition
+
+# 3. Find blast radius — who imports this module (traversal)
+File → IMPORTS → ImportedSymbol (filtered by import_path)
+
+# 4. Find historical reviewers (aggregation)
+User → APPROVED → MergeRequest → IN_PROJECT → Project
+```
+
+---
+
+## Setup
+
+### Prerequisites
+- Python 3.11+
+- GitLab account with Orbit enabled (requires GitLab Duo Enterprise)
+- Anthropic API key
+
+### Local Development
+
+```bash
+git clone https://github.com/divergent99/blast-radius-agent
+cd blast-radius-agent
+
+pip install -r requirements.txt
+
+cp .env.example .env
+# Fill in your keys
+
+uvicorn main:app --reload --port 8000
+```
+
+### Environment Variables
+
+```env
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxxxxxx
+WEBHOOK_SECRET=your_webhook_secret
+```
+
+### Configure GitLab Webhook
+
+1. Go to your GitLab project → **Settings** → **Webhooks**
+2. URL: `https://your-railway-url.up.railway.app/webhook`
+3. Secret token: your `WEBHOOK_SECRET`
+4. Trigger: ✅ Merge request events
+5. Click **Add webhook**
+
+---
+
+## Deployment
+
+Deployed on Railway via Docker.
+
+```bash
+# Railway CLI
+railway login
+railway init
+railway up
+```
+
+Set environment variables in Railway dashboard under **Variables**.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Backend | FastAPI + Uvicorn |
+| Graph queries | GitLab Orbit API |
+| MR data | GitLab REST API |
+| AI synthesis | Claude Sonnet 4.6 (Anthropic) |
+| Deployment | Railway (Docker) |
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE)
+
+---
+
+<div align="center">
+
+Built with 💥 for the GitLab Transcend Hackathon 2026
+
+</div>
