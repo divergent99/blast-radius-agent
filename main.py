@@ -89,18 +89,33 @@ async def graph(req: AnalyzeRequest):
         files = [{"id": f.id, "path": f.path, "name": f.name, "language": f.language}
                  for f in project_file_nodes]
         edges = []
+        seen_edges = set()
+
         for f in project_file_nodes:
             if f.language != "python":
                 continue
             module_path = file_path_to_module(f.path)
             result = orbit.get_blast_radius(module_path, project_files=project_file_paths)
-            for affected in result.affected_files:
-                if affected != f.path:
-                    edges.append({
-                        "source": f.path,
-                        "target": affected,
-                        "symbols": [s["symbol"] for s in result.imported_symbols if s["in_file"] == affected]
-                    })
+
+            # get_blast_radius returns files that IMPORT f (dependents of f).
+            # So the correct edge direction is: dependent → f  (dependent imports f)
+            for dependent in result.affected_files:
+                if dependent == f.path:
+                    continue
+                edge_key = (dependent, f.path)
+                if edge_key in seen_edges:
+                    continue
+                seen_edges.add(edge_key)
+                edges.append({
+                    "source": dependent,   # file that does the importing
+                    "target": f.path,      # file being imported (the dependency)
+                    "symbols": [
+                        s["symbol"]
+                        for s in result.imported_symbols
+                        if s["in_file"] == dependent
+                    ]
+                })
+
         return JSONResponse({"files": files, "edges": edges})
     except Exception as e:
         logger.error(f"Error in /graph: {e}", exc_info=True)
@@ -140,7 +155,12 @@ async def chat(req: ChatRequest):
         files = req.graph_context.get("files", [])
         edges = req.graph_context.get("edges", [])
         files_summary = "\n".join([f"- {f['path']}" for f in files])
-        edges_summary = "\n".join([f"- {e['source']} → {e['target']} (imports: {', '.join(e['symbols'])})" for e in edges])
+        # Edge meaning: source imports target
+        edges_summary = "\n".join([
+            f"- {e['source']} imports {e['target']}" +
+            (f" (symbols: {', '.join(e['symbols'])})" if e.get('symbols') else "")
+            for e in edges
+        ])
 
         message = synth.client.messages.create(
             model="claude-sonnet-4-6",
@@ -152,7 +172,7 @@ async def chat(req: ChatRequest):
 Files in project:
 {files_summary}
 
-Import relationships:
+Import relationships (source imports target):
 {edges_summary}
 
 Answer this question concisely based on the graph structure above:
@@ -207,7 +227,6 @@ async def analyze_and_comment(
     mr_author: str,
 ):
     try:
-        # 1. Get changed files from MR via GitLab REST API
         changed_files = gitlab.get_mr_changed_files(project_id, mr_iid)
         logger.info(f"Changed files: {changed_files}")
 
@@ -215,12 +234,10 @@ async def analyze_and_comment(
             logger.info("No changed files found, skipping")
             return
 
-        # 2. Get all files in this project for noise filtering
         project_file_nodes = orbit.get_project_files(project_path)
         project_file_paths = {f.path for f in project_file_nodes}
         logger.info(f"Project has {len(project_file_paths)} indexed files")
 
-        # 3. For each changed Python file, get blast radius
         blast_radius = {}
         imported_symbols = {}
 
@@ -231,21 +248,18 @@ async def analyze_and_comment(
             module_path = file_path_to_module(file_path)
             result = orbit.get_blast_radius(module_path, project_files=project_file_paths)
 
-            # Exclude the changed file itself
             affected = list({f for f in result.affected_files if f != file_path})
             blast_radius[file_path] = affected
             imported_symbols[file_path] = [
                 s for s in result.imported_symbols if s["in_file"] in affected
             ]
 
-        # 4. Get historical reviewers
         try:
             reviewers = orbit.get_historical_reviewers(project_path)
         except Exception as e:
             logger.warning(f"Could not fetch reviewers: {e}")
             reviewers = []
 
-        # 5. Generate comment with Claude
         comment = synth.generate_blast_radius_comment(
             mr_title=mr_title,
             mr_author=mr_author,
@@ -255,7 +269,6 @@ async def analyze_and_comment(
             suggested_reviewers=reviewers,
         )
 
-        # 6. Post to MR
         full_comment = (
             "## 💥 Blast Radius Analysis\n\n"
             "*Powered by [Blast Radius Reviewer](https://gitlab.com/gitlab-ai-hackathon/transcend/35648667) "
